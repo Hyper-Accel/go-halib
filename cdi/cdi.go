@@ -1,0 +1,112 @@
+// Package cdi generates a CNCF CDI spec mapping LPU /dev nodes into containers.
+// Ported from bertha-device-plugin/pkg/cdi. The CDI kind (vendor/class) is
+// PARAMETRIZED — the lib is vendor-neutral, so the consumer injects the kind:
+// device-plugin passes "hyperaccel.ai"/"bertha" today (wire-compat), and flips
+// to "lpu" in the generic-rename pass. This is the single place that decision lives.
+package cdi
+
+import (
+	"fmt"
+	"strconv"
+	"strings"
+
+	"github.com/Hyper-Accel/go-halib/types"
+	cdiSpecs "tags.cncf.io/container-device-interface/specs-go"
+)
+
+const (
+	DefaultVersion = "0.5.0"        // CDI spec version compatible with containerd 1.6+
+	DefaultVendor  = "hyperaccel.ai"
+	// DefaultClass is the generic LPU class. device-plugin currently passes
+	// "bertha" for wire compatibility; flip callers to "lpu" in the rename pass.
+	DefaultClass = "lpu"
+)
+
+// UpdateSpec builds and writes the CDI spec for devices under "<vendor>/<class>".
+// With no devices it removes the spec file instead.
+func UpdateSpec(devices []*types.Device, vendor, class string, isFake bool, specDir, specFile string) error {
+	g := NewGenerator(specDir, specFile)
+	if len(devices) == 0 {
+		return g.Remove()
+	}
+	spec, err := GenerateSpec(devices, vendor, class, isFake)
+	if err != nil {
+		return fmt.Errorf("generate CDI spec: %w", err)
+	}
+	if err := g.Write(spec); err != nil {
+		return fmt.Errorf("write CDI spec: %w", err)
+	}
+	return nil
+}
+
+// GenerateSpec builds a CDI spec for devices under kind "<vendor>/<class>".
+func GenerateSpec(devices []*types.Device, vendor, class string, isFake bool) (*cdiSpecs.Spec, error) {
+	if len(devices) == 0 {
+		return nil, fmt.Errorf("no devices provided")
+	}
+	var deviceSpecs []cdiSpecs.Device
+	for _, dev := range devices {
+		ds, err := createDeviceSpec(dev, isFake)
+		if err != nil {
+			return nil, fmt.Errorf("create device spec for %s: %w", dev.ID, err)
+		}
+		deviceSpecs = append(deviceSpecs, *ds)
+	}
+	return &cdiSpecs.Spec{
+		Version: DefaultVersion,
+		Kind:    fmt.Sprintf("%s/%s", vendor, class),
+		Devices: deviceSpecs,
+	}, nil
+}
+
+func createDeviceSpec(dev *types.Device, isFake bool) (*cdiSpecs.Device, error) {
+	// Real-mode prefers the name the kernel driver actually registered
+	// (e.g. "ha0", from sysfs) because drivers allocate /dev/haN in probe
+	// order, not by PCI bus number — the legacy "bus - 1" derivation collides
+	// on multi-LPU hosts. Fake-mode (and any real device with no resolved
+	// name) falls back to the bus-derived index so fixtures stay byte-identical.
+	var nodeName string
+	if !isFake && dev.DevName != "" {
+		nodeName = dev.DevName
+	} else {
+		nodeName = fmt.Sprintf("ha%d", ExtractDeviceIndex(dev.PCIAddr))
+	}
+
+	containerPath := "/dev/" + nodeName
+	hostPath := containerPath
+	if isFake {
+		hostPath = "/tmp/fake-devices/dev/" + nodeName
+	}
+
+	deviceNode := &cdiSpecs.DeviceNode{
+		Path:        containerPath,
+		HostPath:    hostPath,
+		Permissions: "rw",
+	}
+
+	return &cdiSpecs.Device{
+		// Sanitize colons from the PCI address for the CDI device name (regex requirement).
+		Name: strings.ReplaceAll(dev.PCIAddr, ":", "_"),
+		ContainerEdits: cdiSpecs.ContainerEdits{
+			DeviceNodes: []*cdiSpecs.DeviceNode{deviceNode},
+		},
+	}, nil
+}
+
+// ExtractDeviceIndex derives the legacy fallback index: 0000:01:00.0 -> bus 0x01 -> 0.
+func ExtractDeviceIndex(pciAddr string) int {
+	parts := strings.Split(pciAddr, ":")
+	if len(parts) < 2 {
+		return 0
+	}
+	busPart := strings.Split(parts[1], ".")[0]
+	bus, err := strconv.ParseInt(busPart, 16, 64)
+	if err != nil {
+		return 0
+	}
+	index := int(bus) - 1
+	if index < 0 {
+		index = 0
+	}
+	return index
+}
