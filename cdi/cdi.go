@@ -20,6 +20,11 @@ const (
 	// DefaultClass is the generic LPU class. device-plugin currently passes
 	// "bertha" for wire compatibility; flip callers to "lpu" in the rename pass.
 	DefaultClass = "lpu"
+
+	// DefaultFakeBaseDir roots fake-mode device host paths when GenerateSpec is
+	// called with an empty fakeBaseDir. It must match where the fake discoverer
+	// creates the device nodes.
+	DefaultFakeBaseDir = "/tmp/fake-devices"
 )
 
 // UpdateSpec builds and writes the CDI spec for devices under "<vendor>/<class>".
@@ -29,7 +34,7 @@ func UpdateSpec(devices []*types.Device, vendor, class string, isFake bool, spec
 	if len(devices) == 0 {
 		return g.Remove()
 	}
-	spec, err := GenerateSpec(devices, vendor, class, isFake)
+	spec, err := GenerateSpec(devices, vendor, class, isFake, "")
 	if err != nil {
 		return fmt.Errorf("generate CDI spec: %w", err)
 	}
@@ -39,14 +44,19 @@ func UpdateSpec(devices []*types.Device, vendor, class string, isFake bool, spec
 	return nil
 }
 
-// GenerateSpec builds a CDI spec for devices under kind "<vendor>/<class>".
-func GenerateSpec(devices []*types.Device, vendor, class string, isFake bool) (*cdiSpecs.Spec, error) {
+// GenerateSpec builds a CDI spec for devices under kind "<vendor>/<class>". In
+// fake mode device host paths are rooted at fakeBaseDir (DefaultFakeBaseDir when
+// empty), matching where the fake discoverer creates the device nodes.
+func GenerateSpec(devices []*types.Device, vendor, class string, isFake bool, fakeBaseDir string) (*cdiSpecs.Spec, error) {
 	if len(devices) == 0 {
 		return nil, fmt.Errorf("no devices provided")
 	}
+	if fakeBaseDir == "" {
+		fakeBaseDir = DefaultFakeBaseDir
+	}
 	var deviceSpecs []cdiSpecs.Device
 	for _, dev := range devices {
-		ds, err := createDeviceSpec(dev, isFake)
+		ds, err := createDeviceSpec(dev, isFake, fakeBaseDir)
 		if err != nil {
 			return nil, fmt.Errorf("create device spec for %s: %w", dev.ID, err)
 		}
@@ -59,7 +69,7 @@ func GenerateSpec(devices []*types.Device, vendor, class string, isFake bool) (*
 	}, nil
 }
 
-func createDeviceSpec(dev *types.Device, isFake bool) (*cdiSpecs.Device, error) {
+func createDeviceSpec(dev *types.Device, isFake bool, fakeBaseDir string) (*cdiSpecs.Device, error) {
 	// Real-mode prefers the name the kernel driver actually registered
 	// (e.g. "ha0", from sysfs) because drivers allocate /dev/haN in probe
 	// order, not by PCI bus number — the legacy "bus - 1" derivation collides
@@ -75,7 +85,7 @@ func createDeviceSpec(dev *types.Device, isFake bool) (*cdiSpecs.Device, error) 
 	containerPath := "/dev/" + nodeName
 	hostPath := containerPath
 	if isFake {
-		hostPath = "/tmp/fake-devices/dev/" + nodeName
+		hostPath = strings.TrimRight(fakeBaseDir, "/") + "/dev/" + nodeName
 	}
 
 	deviceNode := &cdiSpecs.DeviceNode{

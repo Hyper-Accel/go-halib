@@ -33,7 +33,7 @@ func TestGenerateSpec(t *testing.T) {
 		{ID: "1f26-0000:02:00.0", PCIAddr: "0000:02:00.0", VendorID: "1f26", DeviceID: "0000", Health: types.Healthy},
 	}
 
-	spec, err := GenerateSpec(devices, DefaultVendor, DefaultClass, true)
+	spec, err := GenerateSpec(devices, DefaultVendor, DefaultClass, true, "")
 	if err != nil {
 		t.Fatalf("GenerateSpec() error = %v", err)
 	}
@@ -67,7 +67,7 @@ func TestGenerateSpec(t *testing.T) {
 func TestGenerateSpec_CustomKind(t *testing.T) {
 	// Consumers inject the CDI kind; device-plugin passes "bertha" for wire compat.
 	devices := []*types.Device{{ID: "x", PCIAddr: "0000:01:00.0", VendorID: "1f26", DeviceID: "0000"}}
-	spec, err := GenerateSpec(devices, "hyperaccel.ai", "bertha", true)
+	spec, err := GenerateSpec(devices, "hyperaccel.ai", "bertha", true, "")
 	if err != nil {
 		t.Fatalf("GenerateSpec() error = %v", err)
 	}
@@ -77,8 +77,21 @@ func TestGenerateSpec_CustomKind(t *testing.T) {
 }
 
 func TestGenerateSpec_Empty(t *testing.T) {
-	if _, err := GenerateSpec(nil, DefaultVendor, DefaultClass, true); err == nil {
+	if _, err := GenerateSpec(nil, DefaultVendor, DefaultClass, true, ""); err == nil {
 		t.Error("GenerateSpec(nil) should error")
+	}
+}
+
+// A non-empty fakeBaseDir must root the fake host path (so it matches where the
+// fake discoverer created the node), not the hard-coded default. bus 0x81 -> 128.
+func TestGenerateSpec_CustomFakeBaseDir(t *testing.T) {
+	devices := []*types.Device{{ID: "x", PCIAddr: "0000:81:00.0", VendorID: "1f26"}}
+	spec, err := GenerateSpec(devices, DefaultVendor, DefaultClass, true, "/custom/fakes")
+	if err != nil {
+		t.Fatalf("GenerateSpec: %v", err)
+	}
+	if got, want := spec.Devices[0].ContainerEdits.DeviceNodes[0].HostPath, "/custom/fakes/dev/ha128"; got != want {
+		t.Errorf("HostPath = %s, want %s (fakeBaseDir must root the host path)", got, want)
 	}
 }
 
@@ -87,7 +100,7 @@ func TestGenerateSpec_Empty(t *testing.T) {
 // probe order — the bus-derived path collides on multi-LPU hosts.
 func TestCreateDeviceSpec_RealUsesDevName(t *testing.T) {
 	dev := &types.Device{ID: "20fb-0000:19:00.0", PCIAddr: "0000:19:00.0", VendorID: "20fb", DeviceID: "0010", Health: types.Healthy, DevName: "ha0"}
-	spec, err := createDeviceSpec(dev, false)
+	spec, err := createDeviceSpec(dev, false, "")
 	if err != nil {
 		t.Fatalf("createDeviceSpec: %v", err)
 	}
@@ -104,7 +117,7 @@ func TestCreateDeviceSpec_RealUsesDevName(t *testing.T) {
 // sysfs class symlink, and for fixtures).
 func TestCreateDeviceSpec_RealFallbackWithoutDevName(t *testing.T) {
 	dev := &types.Device{PCIAddr: "0000:01:00.0"} // bus 1 -> index 0
-	spec, err := createDeviceSpec(dev, false)
+	spec, err := createDeviceSpec(dev, false, "")
 	if err != nil {
 		t.Fatalf("createDeviceSpec: %v", err)
 	}
@@ -116,7 +129,7 @@ func TestCreateDeviceSpec_RealFallbackWithoutDevName(t *testing.T) {
 // Fake mode never consumes DevName, preserving the /tmp/fake-devices layout CI relies on.
 func TestCreateDeviceSpec_FakeIgnoresDevName(t *testing.T) {
 	dev := &types.Device{PCIAddr: "0000:01:00.0", DevName: "should-not-be-used"}
-	spec, err := createDeviceSpec(dev, true)
+	spec, err := createDeviceSpec(dev, true, "/tmp/fake-devices")
 	if err != nil {
 		t.Fatalf("createDeviceSpec: %v", err)
 	}
