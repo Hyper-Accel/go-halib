@@ -7,12 +7,42 @@ package cdi
 
 import (
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/Hyper-Accel/go-halib/types"
 	cdiSpecs "tags.cncf.io/container-device-interface/specs-go"
 )
+
+// umdHostPaths are the user-mode driver artifacts the kernel driver installs on
+// the host. They must be mounted into the container alongside the device node,
+// otherwise the device node is present but no app can open the LPU (no UMD lib).
+// Matches the kernel driver's CDI (ha-cdi.py) so this is a drop-in replacement.
+var umdHostPaths = []string{
+	"/usr/local/lib/libha_driver.so",
+	"/usr/local/include/ha_driver.h",
+	"/usr/local/lib/pkgconfig/libha_driver.pc",
+}
+
+// umdMounts returns ro bind mounts for the UMD artifacts that actually exist on
+// the host (skipped entirely in fake mode, which has no real driver).
+func umdMounts(isFake bool) []*cdiSpecs.Mount {
+	if isFake {
+		return nil
+	}
+	var ms []*cdiSpecs.Mount
+	for _, p := range umdHostPaths {
+		if _, err := os.Stat(p); err == nil {
+			ms = append(ms, &cdiSpecs.Mount{
+				HostPath:      p,
+				ContainerPath: p,
+				Options:       []string{"ro", "nosuid", "nodev", "bind"},
+			})
+		}
+	}
+	return ms
+}
 
 const (
 	DefaultVersion = "0.5.0"        // CDI spec version compatible with containerd 1.6+
@@ -66,6 +96,9 @@ func GenerateSpec(devices []*types.Device, vendor, class string, isFake bool, fa
 		Version: DefaultVersion,
 		Kind:    fmt.Sprintf("%s/%s", vendor, class),
 		Devices: deviceSpecs,
+		ContainerEdits: cdiSpecs.ContainerEdits{
+			Mounts: umdMounts(isFake),
+		},
 	}, nil
 }
 
