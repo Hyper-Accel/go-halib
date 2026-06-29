@@ -13,7 +13,7 @@ permissions:
 jobs:
   build-test:
     name: build / vet / test (noop)
-    runs-on: ubuntu-latest
+    runs-on: runner-base
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
