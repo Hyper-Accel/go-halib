@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/Hyper-Accel/go-halib/types"
+	cdiSpecs "tags.cncf.io/container-device-interface/specs-go"
 )
 
 func TestExtractDeviceIndex(t *testing.T) {
@@ -45,22 +46,44 @@ func TestGenerateSpec(t *testing.T) {
 	if spec.Kind != expectedKind {
 		t.Errorf("Kind = %s, want %s", spec.Kind, expectedKind)
 	}
-	if len(spec.Devices) != 2 {
-		t.Fatalf("Devices count = %d, want 2", len(spec.Devices))
+	// Each device gets a human-friendly index alias + a stable BDF alias, plus a
+	// single "all". 2 devices -> "0","0000_01_00.0","1","0000_02_00.0","all" = 5.
+	if len(spec.Devices) != 5 {
+		t.Fatalf("Devices count = %d, want 5 (2 index + 2 bdf + all)", len(spec.Devices))
 	}
-
-	dev0 := spec.Devices[0]
-	if dev0.Name != "0000_01_00.0" {
-		t.Errorf("Device[0].Name = %s, want 0000_01_00.0", dev0.Name)
+	byName := map[string]cdiSpecs.Device{}
+	for _, d := range spec.Devices {
+		byName[d.Name] = d
 	}
-	if len(dev0.ContainerEdits.DeviceNodes) != 1 {
-		t.Fatalf("Device[0].DeviceNodes count = %d, want 1", len(dev0.ContainerEdits.DeviceNodes))
+	// Index alias "0" and BDF alias "0000_01_00.0" both map to the same /dev/ha0.
+	for _, name := range []string{"0", "0000_01_00.0"} {
+		d, ok := byName[name]
+		if !ok {
+			t.Fatalf("missing device alias %q", name)
+		}
+		if len(d.ContainerEdits.DeviceNodes) != 1 {
+			t.Fatalf("alias %q DeviceNodes = %d, want 1", name, len(d.ContainerEdits.DeviceNodes))
+		}
+		if got := d.ContainerEdits.DeviceNodes[0].Path; got != "/dev/ha0" {
+			t.Errorf("alias %q Path = %s, want /dev/ha0", name, got)
+		}
+		if got := d.ContainerEdits.DeviceNodes[0].HostPath; got != "/tmp/fake-devices/dev/ha0" {
+			t.Errorf("alias %q HostPath = %s, want /tmp/fake-devices/dev/ha0", name, got)
+		}
 	}
-	if got := dev0.ContainerEdits.DeviceNodes[0].Path; got != "/dev/ha0" {
-		t.Errorf("Device[0].DeviceNodes[0].Path = %s, want /dev/ha0", got)
+	// The second device's aliases exist too.
+	for _, name := range []string{"1", "0000_02_00.0"} {
+		if _, ok := byName[name]; !ok {
+			t.Errorf("missing device alias %q", name)
+		}
 	}
-	if got := dev0.ContainerEdits.DeviceNodes[0].HostPath; got != "/tmp/fake-devices/dev/ha0" {
-		t.Errorf("Device[0].DeviceNodes[0].HostPath = %s, want /tmp/fake-devices/dev/ha0", got)
+	// "all" injects every device node.
+	all, ok := byName["all"]
+	if !ok {
+		t.Fatal(`missing "all" device`)
+	}
+	if len(all.ContainerEdits.DeviceNodes) != 2 {
+		t.Errorf("all DeviceNodes = %d, want 2", len(all.ContainerEdits.DeviceNodes))
 	}
 }
 

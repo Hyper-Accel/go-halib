@@ -85,13 +85,39 @@ func GenerateSpec(devices []*types.Device, vendor, class string, isFake bool, fa
 		fakeBaseDir = DefaultFakeBaseDir
 	}
 	var deviceSpecs []cdiSpecs.Device
+	var allNodes []*cdiSpecs.DeviceNode
+	seen := map[string]bool{}
+	add := func(name string, nodes []*cdiSpecs.DeviceNode) {
+		if name == "" || seen[name] {
+			return
+		}
+		seen[name] = true
+		deviceSpecs = append(deviceSpecs, cdiSpecs.Device{
+			Name:           name,
+			ContainerEdits: cdiSpecs.ContainerEdits{DeviceNodes: nodes},
+		})
+	}
 	for _, dev := range devices {
 		ds, err := createDeviceSpec(dev, isFake, fakeBaseDir)
 		if err != nil {
 			return nil, fmt.Errorf("create device spec for %s: %w", dev.ID, err)
 		}
-		deviceSpecs = append(deviceSpecs, *ds)
+		node := ds.ContainerEdits.DeviceNodes[0]
+		allNodes = append(allNodes, node)
+		// Two aliases per device, both mapping to the same /dev node:
+		//   - a human-friendly index ("0"), derived from the /dev/haN node name,
+		//     so `--device <kind>=0` works like nvidia.com/gpu=0;
+		//   - the stable PCI-BDF ("0000_01_00.0"), for scripted/reproducible
+		//     pinning and backward-compat with the device-plugin's references.
+		idxName := strings.TrimPrefix(strings.TrimPrefix(node.Path, "/dev/"), "ha")
+		add(idxName, []*cdiSpecs.DeviceNode{node})
+		add(ds.Name, []*cdiSpecs.DeviceNode{node}) // ds.Name is the BDF alias
 	}
+	// "all" injects every device at once (mirrors nvidia.com/gpu=all): for a
+	// single container that uses every LPU (e.g. tensor/pipeline parallel), NOT
+	// for sharing one device across containers.
+	add("all", allNodes)
+
 	return &cdiSpecs.Spec{
 		Version: DefaultVersion,
 		Kind:    fmt.Sprintf("%s/%s", vendor, class),
