@@ -1,0 +1,13 @@
+version: 2
+updates:
+  # Go module deps (go-halib directly requires only the CDI libs; dependabot
+  # keeps them current so consumers like ha-device-plugin don't drift ahead).
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 10
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
