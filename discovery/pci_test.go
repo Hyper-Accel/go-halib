@@ -20,12 +20,15 @@ func TestResolveCharDevName_LeafDir(t *testing.T) {
 		t.Fatalf("setup write dev: %v", err)
 	}
 
-	got, err := resolveCharDevName(pciAddr)
+	got, devDir, err := resolveCharDevName(pciAddr)
 	if err != nil {
 		t.Fatalf("resolveCharDevName: %v", err)
 	}
 	if got != "ha0" {
 		t.Errorf("got %q, want %q", got, "ha0")
+	}
+	if devDir != leaf {
+		t.Errorf("devDir = %q, want %q", devDir, leaf)
 	}
 }
 
@@ -37,7 +40,7 @@ func TestResolveCharDevName_MissingClass(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(sysfsPCIDevices, "0000:99:00.0"), 0o755); err != nil {
 		t.Fatalf("setup: %v", err)
 	}
-	if _, err := resolveCharDevName("0000:99:00.0"); err == nil {
+	if _, _, err := resolveCharDevName("0000:99:00.0"); err == nil {
 		t.Error("expected error when no class subdirectory has a dev file, got nil")
 	}
 }
@@ -56,11 +59,11 @@ func TestScanDevices_SysfsDirect(t *testing.T) {
 		}
 	}
 	for _, fixture := range []struct {
-		addr, vendor, class, device, dev string
+		addr, vendor, class, device, dev, serial string
 	}{
-		{"0000:19:00.0", "0x20fb", "0x120000", "0x0010", "ha0"},
-		{"0000:af:00.0", "0x20fb", "0x120000", "0x0010", "ha1"},
-		{"0000:99:00.0", "0x8086", "0x020000", "0x1234", ""},
+		{"0000:19:00.0", "0x20fb", "0x120000", "0x0010", "ha0", "HA-SERIAL-0001"},
+		{"0000:af:00.0", "0x20fb", "0x120000", "0x0010", "ha1", ""}, // driver without serial attr
+		{"0000:99:00.0", "0x8086", "0x020000", "0x1234", "", ""},
 	} {
 		base := filepath.Join(sysfsPCIDevices, fixture.addr)
 		mustWrite(filepath.Join(base, "vendor"), fixture.vendor+"\n")
@@ -69,6 +72,9 @@ func TestScanDevices_SysfsDirect(t *testing.T) {
 		if fixture.dev != "" {
 			leaf := filepath.Join(base, "ha", fixture.dev)
 			mustWrite(filepath.Join(leaf, "dev"), "511:0\n")
+			if fixture.serial != "" {
+				mustWrite(filepath.Join(leaf, "serial"), fixture.serial+"\n")
+			}
 		}
 	}
 
@@ -100,6 +106,19 @@ func TestScanDevices_SysfsDirect(t *testing.T) {
 	}
 	if got["0000:af:00.0"] != "ha1" {
 		t.Errorf("DevName for 0000:af:00.0 = %q, want ha1", got["0000:af:00.0"])
+	}
+
+	// Serial is read from the class device dir when the driver exposes it, and
+	// left "" otherwise (never an error).
+	serials := map[string]string{}
+	for _, dv := range devs {
+		serials[dv.PCIAddr] = dv.Serial
+	}
+	if serials["0000:19:00.0"] != "HA-SERIAL-0001" {
+		t.Errorf("Serial for 0000:19:00.0 = %q, want HA-SERIAL-0001", serials["0000:19:00.0"])
+	}
+	if serials["0000:af:00.0"] != "" {
+		t.Errorf("Serial for 0000:af:00.0 = %q, want empty (no serial attr)", serials["0000:af:00.0"])
 	}
 }
 

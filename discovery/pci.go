@@ -76,11 +76,16 @@ func (p *PCIDiscoverer) ScanDevices() error {
 			DeviceID: normalizeHexID(deviceID),
 			NUMANode: -1,
 		}
-		if name, err := resolveCharDevName(pciAddr); err != nil {
+		if name, devDir, err := resolveCharDevName(pciAddr); err != nil {
 			log.Printf("[go-halib] could not resolve /dev node for %s: %v; CDI will fall back to PCI-bus derived index", pciAddr, err)
 		} else {
 			dev.DevName = name
-			log.Printf("[go-halib] PCI %s -> /dev/%s", pciAddr, name)
+			// Stable board serial from the class device dir (survives reseat).
+			// Best-effort: older drivers may not expose it.
+			if serial, e := readSysAttr(filepath.Join(devDir, "serial")); e == nil {
+				dev.Serial = serial
+			}
+			log.Printf("[go-halib] PCI %s -> /dev/%s (serial=%q)", pciAddr, name, dev.Serial)
 		}
 		devices = append(devices, dev)
 	}
@@ -103,31 +108,36 @@ func normalizeHexID(s string) string {
 	return strings.TrimPrefix(s, "0x")
 }
 
-func resolveCharDevName(pciAddr string) (string, error) {
+// resolveCharDevName returns the char device name (e.g. "ha0") AND the sysfs
+// directory of that class device (e.g. "<pci>/ha/ha0"), which is also where the
+// driver exposes per-device attributes like serial. devDir lets callers read
+// those without re-walking. Both are "" on error.
+func resolveCharDevName(pciAddr string) (name, devDir string, err error) {
 	pciDir := filepath.Join(sysfsPCIDevices, pciAddr)
-	entries, err := os.ReadDir(pciDir)
-	if err != nil {
-		return "", fmt.Errorf("read %s: %w", pciDir, err)
+	entries, e := os.ReadDir(pciDir)
+	if e != nil {
+		return "", "", fmt.Errorf("read %s: %w", pciDir, e)
 	}
-	for _, e := range entries {
-		if !e.IsDir() {
+	for _, ent := range entries {
+		if !ent.IsDir() {
 			continue
 		}
-		classDir := filepath.Join(pciDir, e.Name())
-		subentries, err := os.ReadDir(classDir)
-		if err != nil {
+		classDir := filepath.Join(pciDir, ent.Name())
+		subentries, e := os.ReadDir(classDir)
+		if e != nil {
 			continue
 		}
 		for _, se := range subentries {
 			if !se.IsDir() {
 				continue
 			}
-			if _, err := os.Stat(filepath.Join(classDir, se.Name(), "dev")); err == nil {
-				return se.Name(), nil
+			dir := filepath.Join(classDir, se.Name())
+			if _, e := os.Stat(filepath.Join(dir, "dev")); e == nil {
+				return se.Name(), dir, nil
 			}
 		}
 	}
-	return "", fmt.Errorf("no class device subdirectory with a dev file under %s", pciDir)
+	return "", "", fmt.Errorf("no class device subdirectory with a dev file under %s", pciDir)
 }
 
 // GetDevices returns a copy of the discovered device slice (shared *Device

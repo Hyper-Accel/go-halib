@@ -14,6 +14,7 @@ const (
 type Device struct {
 	ID       string // logical id, e.g. "<vendorID>-<pciAddr>"
 	DevName  string // host /dev node, e.g. "ha0" (empty in fake mode)
+	Serial   string // stable board serial from /sys/class/ha/<dev>/serial; survives reseat/slot moves (empty if the driver doesn't expose it)
 	PCIAddr  string
 	VendorID string
 	DeviceID string
