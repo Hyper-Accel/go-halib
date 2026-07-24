@@ -14,15 +14,22 @@ import (
 	cdiSpecs "tags.cncf.io/container-device-interface/specs-go"
 )
 
-// umdHostPaths are the user-mode driver artifacts the kernel driver installs on
-// the host. They must be mounted into the container alongside the device node,
-// otherwise the device node is present but no app can open the LPU (no UMD lib).
-// Matches the kernel driver's CDI (ha-cdi.py) so this is a drop-in replacement.
-var umdHostPaths = []string{
-	"/usr/local/lib/libha_driver.so",
-	"/usr/local/include/ha_driver.h",
-	"/usr/local/lib/pkgconfig/libha_driver.pc",
-}
+// UMD artifact host paths. These are the user-mode driver files the kernel
+// driver installs on the host; they are mounted read-only into every LPU
+// container (a device node without the UMD lib cannot open the LPU). Matches the
+// kernel driver's CDI (ha-cdi.py) so this is a drop-in replacement.
+//
+// They are hardcoded to the driver's current install layout. If the driver team
+// renames an artifact or moves an install path, update the matching constant
+// here — it is the single place these paths live.
+const (
+	UMDLibPath    = "/usr/local/lib/libha_driver.so"           // runtime shared library
+	UMDHeaderPath = "/usr/local/include/ha_driver.h"           // build-time header
+	UMDPkgCfgPath = "/usr/local/lib/pkgconfig/libha_driver.pc" // pkg-config metadata
+)
+
+// umdHostPaths is the ordered set mounted into every LPU container.
+var umdHostPaths = []string{UMDLibPath, UMDHeaderPath, UMDPkgCfgPath}
 
 // umdMounts returns ro bind mounts for the UMD artifacts (skipped entirely in
 // fake mode, which has no real driver).
@@ -55,7 +62,7 @@ func umdMounts(isFake bool) []*cdiSpecs.Mount {
 }
 
 const (
-	DefaultVersion = "0.5.0"        // CDI spec version compatible with containerd 1.6+
+	DefaultVersion = "0.5.0" // CDI spec version compatible with containerd 1.6+
 	DefaultVendor  = "hyperaccel.ai"
 	// DefaultClass is the generic LPU class. device-plugin currently passes
 	// "bertha" for wire compatibility; flip callers to "lpu" in the rename pass.
