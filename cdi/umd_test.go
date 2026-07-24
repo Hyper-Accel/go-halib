@@ -1,8 +1,6 @@
 package cdi
 
 import (
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -13,30 +11,31 @@ func TestUMDMounts_FakeSkips(t *testing.T) {
 	}
 }
 
-func TestUMDMounts_RealMountsOnlyExisting(t *testing.T) {
-	dir := t.TempDir()
-	present := filepath.Join(dir, "libha_driver.so")
-	if err := os.WriteFile(present, []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	absent := filepath.Join(dir, "missing.so")
-
+func TestUMDMounts_RealMountsAllUnconditionally(t *testing.T) {
+	// Real mode emits every umdHostPath as a host bind mount, with NO existence
+	// check: the paths are host paths, but the old os.Stat ran against the
+	// calling process's own filesystem — so the same host produced different
+	// specs depending on which image (device-plugin vs distroless ha-ctk daemon)
+	// generated it. The daemon's stat failed and dropped every mount, yielding a
+	// device node with no driver library. The contract is now image-independent.
 	saved := umdHostPaths
-	umdHostPaths = []string{present, absent}
+	umdHostPaths = []string{"/a/libha_driver.so", "/b/ha_driver.h", "/c/x.pc"}
 	t.Cleanup(func() { umdHostPaths = saved })
 
 	ms := umdMounts(false)
-	if len(ms) != 1 {
-		t.Fatalf("umdMounts(real) returned %d mounts, want 1 (only the existing artifact)", len(ms))
+	if len(ms) != len(umdHostPaths) {
+		t.Fatalf("umdMounts(real) returned %d mounts, want %d (all, unconditionally)", len(ms), len(umdHostPaths))
 	}
-	if ms[0].HostPath != present || ms[0].ContainerPath != present {
-		t.Errorf("mount = host %q / container %q, want both %q", ms[0].HostPath, ms[0].ContainerPath, present)
-	}
-	want := map[string]bool{"ro": true, "nosuid": true, "nodev": true, "bind": true}
-	for _, opt := range ms[0].Options {
-		delete(want, opt)
-	}
-	if len(want) != 0 {
-		t.Errorf("mount options %v missing %v", ms[0].Options, want)
+	for i, p := range umdHostPaths {
+		if ms[i].HostPath != p || ms[i].ContainerPath != p {
+			t.Errorf("mount[%d] = host %q / container %q, want both %q", i, ms[i].HostPath, ms[i].ContainerPath, p)
+		}
+		want := map[string]bool{"ro": true, "nosuid": true, "nodev": true, "bind": true}
+		for _, opt := range ms[i].Options {
+			delete(want, opt)
+		}
+		if len(want) != 0 {
+			t.Errorf("mount[%d] options %v missing %v", i, ms[i].Options, want)
+		}
 	}
 }
