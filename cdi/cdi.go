@@ -7,7 +7,6 @@ package cdi
 
 import (
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 
@@ -25,21 +24,32 @@ var umdHostPaths = []string{
 	"/usr/local/lib/pkgconfig/libha_driver.pc",
 }
 
-// umdMounts returns ro bind mounts for the UMD artifacts that actually exist on
-// the host (skipped entirely in fake mode, which has no real driver).
+// umdMounts returns ro bind mounts for the UMD artifacts (skipped entirely in
+// fake mode, which has no real driver).
+//
+// The mounts are emitted unconditionally in real mode — no os.Stat existence
+// check. The paths are HOST paths, but the check ran against the CALLING
+// PROCESS's filesystem, which is a different namespace: the device-plugin image
+// happens to bundle a (stale) copy of the UMD so its stat passed, while the
+// distroless ha-ctk daemon image has no UMD so its stat failed and it silently
+// dropped every mount — producing a spec with the device node but no driver
+// library, i.e. a container that sees /dev/haN but cannot open the LPU. Since
+// the UMD is a hard requirement installed by the kernel driver (per umdHostPaths'
+// own contract), a missing file is a real error surfaced at container start
+// ("no such file or directory" on the bind), not something to paper over by
+// omitting the mount. This makes the spec identical regardless of which image
+// generates it.
 func umdMounts(isFake bool) []*cdiSpecs.Mount {
 	if isFake {
 		return nil
 	}
-	var ms []*cdiSpecs.Mount
+	ms := make([]*cdiSpecs.Mount, 0, len(umdHostPaths))
 	for _, p := range umdHostPaths {
-		if _, err := os.Stat(p); err == nil {
-			ms = append(ms, &cdiSpecs.Mount{
-				HostPath:      p,
-				ContainerPath: p,
-				Options:       []string{"ro", "nosuid", "nodev", "bind"},
-			})
-		}
+		ms = append(ms, &cdiSpecs.Mount{
+			HostPath:      p,
+			ContainerPath: p,
+			Options:       []string{"ro", "nosuid", "nodev", "bind"},
+		})
 	}
 	return ms
 }
