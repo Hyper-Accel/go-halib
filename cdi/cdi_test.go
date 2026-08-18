@@ -2,9 +2,11 @@ package cdi
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/Hyper-Accel/go-halib/types"
+	"tags.cncf.io/container-device-interface/pkg/cdi"
 	cdiSpecs "tags.cncf.io/container-device-interface/specs-go"
 )
 
@@ -159,4 +161,66 @@ func TestCreateDeviceSpec_FakeIgnoresDevName(t *testing.T) {
 	if got := spec.ContainerEdits.DeviceNodes[0].HostPath; got != "/tmp/fake-devices/dev/ha0" {
 		t.Errorf("HostPath = %s, want /tmp/fake-devices/dev/ha0", got)
 	}
+}
+
+// Every device name this package emits must survive the Kubernetes path, where
+// the device ID becomes part of an annotation key.
+//
+// This is the constraint that forces PCI addresses to carry underscores rather
+// than colons, and it is easy to get wrong because nothing else enforces it:
+// CDI's own name validation accepts a colon, and `docker run --device
+// hyperaccel.ai/lpu=0000:9c:00.0` works on a plain host. A colon name breaks
+// only under Kubernetes — so a change that reverts the sanitizing would pass
+// every local test and fail in a cluster.
+func TestDeviceNameSurvivesTheKubernetesPath(t *testing.T) {
+	devices := []*types.Device{
+		{ID: "1f26-0000:9c:00.0", PCIAddr: "0000:9c:00.0", VendorID: "1f26", DeviceID: "0000", Health: types.Healthy},
+	}
+
+	spec, err := GenerateSpec(devices, DefaultVendor, DefaultClass, true, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, d := range spec.Devices {
+		// kubelet builds `cdi.k8s.io/<plugin>_<deviceID>` from the device name;
+		// annotation keys allow only alphanumerics, '_', '-' and '.'.
+		if _, err := cdi.AnnotationKey("ha-device-plugin", d.Name); err != nil {
+			t.Errorf("device %q cannot be used under Kubernetes: %v", d.Name, err)
+		}
+	}
+}
+
+// Pin the shape too: a reader should not have to run the test to learn that the
+// PCI address is the name, with colons replaced.
+func TestPCIAddressBecomesTheDeviceName(t *testing.T) {
+	devices := []*types.Device{
+		{ID: "1f26-0000:9c:00.0", PCIAddr: "0000:9c:00.0", VendorID: "1f26", DeviceID: "0000", Health: types.Healthy},
+	}
+
+	spec, err := GenerateSpec(devices, DefaultVendor, DefaultClass, true, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var found bool
+	for _, d := range spec.Devices {
+		if d.Name == "0000_9c_00.0" {
+			found = true
+		}
+		if strings.Contains(d.Name, ":") {
+			t.Errorf("device name %q still carries a colon", d.Name)
+		}
+	}
+	if !found {
+		t.Errorf("expected a device named 0000_9c_00.0, got %v", names(spec.Devices))
+	}
+}
+
+func names(devs []cdiSpecs.Device) []string {
+	out := make([]string, 0, len(devs))
+	for _, d := range devs {
+		out = append(out, d.Name)
+	}
+	return out
 }

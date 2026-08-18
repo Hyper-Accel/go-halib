@@ -171,7 +171,17 @@ func createDeviceSpec(dev *types.Device, isFake bool, fakeBaseDir string) (*cdiS
 	}
 
 	return &cdiSpecs.Device{
-		// Sanitize colons from the PCI address for the CDI device name (regex requirement).
+		// Colons become underscores because of the Kubernetes path, not the CDI
+		// spec. CDI itself accepts a colon in a device name — parser.ValidateDeviceName
+		// allows ':' and a plain `docker run --device hyperaccel.ai/lpu=0000:9c:00.0`
+		// works. What rejects it is cdi.AnnotationKey: under Kubernetes the device
+		// plugin hands the device ID to kubelet, which passes it to the runtime as
+		// the annotation key `cdi.k8s.io/<plugin>_<deviceID>`, and annotation keys
+		// permit only alphanumerics, '_', '-' and '.'.
+		//
+		// The failure mode this prevents is quiet: a colon name works on a plain
+		// host and breaks only on Kubernetes, so anyone testing with docker would
+		// conclude the sanitizing is unnecessary. See TestDeviceNameSurvivesTheKubernetesPath.
 		Name: strings.ReplaceAll(dev.PCIAddr, ":", "_"),
 		ContainerEdits: cdiSpecs.ContainerEdits{
 			DeviceNodes: []*cdiSpecs.DeviceNode{deviceNode},
